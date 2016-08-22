@@ -103,7 +103,7 @@ allocator::Initialize(size_t ncpus, size_t maxpercore)
   // of g_memstart to a huge page boundary
 
   void * const x = mmap(nullptr, g_ncpus * g_maxpercore + hugepgsize,
-      PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+      PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
   if (x == MAP_FAILED) {
     perror("mmap");
     ALWAYS_ASSERT(false);
@@ -246,18 +246,18 @@ allocator::AllocateUnmanagedWithLock(regionctx &pc, size_t nhugepgs)
 
   if (needs_mmap) {
     void * const x = mmap(mypx, hugepgsize, PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_HUGETLB, -1, 0);
     if (unlikely(x == MAP_FAILED)) {
       perror("mmap");
       ALWAYS_ASSERT(false);
     }
     INVARIANT(x == mypx);
-    const int advice =
-      UseMAdvWillNeed() ? MADV_HUGEPAGE | MADV_WILLNEED : MADV_HUGEPAGE;
-    if (madvise(x, hugepgsize, advice)) {
-      perror("madvise");
-      ALWAYS_ASSERT(false);
-    }
+    //const int advice =
+    //  UseMAdvWillNeed() ? MADV_HUGEPAGE | MADV_WILLNEED : MADV_HUGEPAGE;
+    //if (madvise(x, hugepgsize, advice)) {
+    //  perror("madvise");
+    //  ALWAYS_ASSERT(false);
+    //}
   }
 
   return mypx;
@@ -335,7 +335,7 @@ allocator::FaultRegion(size_t cpu)
     reinterpret_cast<uintptr_t>(pc.region_end) -
     reinterpret_cast<uintptr_t>(pc.region_begin);
   void * const x = mmap(pc.region_begin, sz, PROT_READ | PROT_WRITE,
-      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_HUGETLB, -1, 0);
   if (unlikely(x == MAP_FAILED)) {
     perror("mmap");
     std::cerr << "  cpu" << cpu
@@ -344,12 +344,12 @@ allocator::FaultRegion(size_t cpu)
     ALWAYS_ASSERT(false);
   }
   ALWAYS_ASSERT(x == pc.region_begin);
-  const int advice =
-    UseMAdvWillNeed() ? MADV_HUGEPAGE | MADV_WILLNEED : MADV_HUGEPAGE;
-  if (madvise(x, sz, advice)) {
-    perror("madvise");
-    ALWAYS_ASSERT(false);
-  }
+  //const int advice =
+  //  UseMAdvWillNeed() ? MADV_HUGEPAGE | MADV_WILLNEED : MADV_HUGEPAGE;
+  //if (madvise(x, sz, advice)) {
+  //  perror("madvise");
+  //  ALWAYS_ASSERT(false);
+  //}
   numa_hint_memory_placement(
       pc.region_begin,
       (uintptr_t)pc.region_end - (uintptr_t)pc.region_begin,
