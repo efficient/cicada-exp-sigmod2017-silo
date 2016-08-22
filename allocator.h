@@ -38,9 +38,11 @@ public:
   static void
   ReleaseArenas(void **arenas);
 
-  static const size_t LgAllocAlignment = 4; // all allocations aligned to 2^4 = 16
+  //static const size_t LgAllocAlignment = 4; // all allocations aligned to 2^4 = 16
+  static const size_t LgAllocAlignment = 6; // all allocations aligned to 2^6 = 64
   static const size_t AllocAlignment = 1 << LgAllocAlignment;
-  static const size_t MAX_ARENAS = 32;
+  //static const size_t MAX_ARENAS = 32;
+  static const size_t MAX_ARENAS = 64;
 
   static inline std::pair<size_t, size_t>
   ArenaSize(size_t sz)
