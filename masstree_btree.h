@@ -405,6 +405,13 @@ public:
                    insert_info_t *insert_info = NULL);
 
   /**
+   * Inserts k=>v or increment ref count
+   */
+  inline bool
+  insert_refcount(const key_type &k, value_type v,
+                  insert_info_t *insert_info = NULL);
+
+  /**
    * return true if a value was removed, false otherwise.
    *
    * if true and old_v is not NULL, then the removed value of v
@@ -412,6 +419,15 @@ public:
    */
   inline bool
   remove(const key_type &k, value_type *old_v = NULL);
+
+  /**
+   * return true if a value was removed, false otherwise.
+   *
+   * if true and old_v is not NULL, then the removed value of v
+   * is written into old_v
+   */
+  inline bool
+  remove_refcount(const key_type &k, value_type *old_v = NULL);
 
   /**
    * The tree walk API is a bit strange, due to the optimistic nature of the
@@ -639,6 +655,29 @@ inline bool mbtree<P>::insert_if_absent(const key_type &k, value_type v,
   return !found;
 }
 
+template <typename P>
+inline bool mbtree<P>::insert_refcount(const key_type &k, value_type v,
+                                       insert_info_t *insert_info)
+{
+  //return insert_if_absent(k, v, insert_info);
+  rcu_region guard;
+  threadinfo ti;
+  Masstree::tcursor<P> lp(table_, k.data(), k.length());
+  bool found = lp.find_insert(ti);
+  ti.advance_timestamp(lp.node_timestamp());
+  if (!found)
+    lp.value() = v;
+  else
+    ++lp.value().refcount;
+  if (insert_info) {
+    insert_info->node = lp.node();
+    insert_info->old_version = lp.previous_full_version_value();
+    insert_info->new_version = lp.next_full_version_value(1);
+  }
+  lp.finish(1, ti);
+  return true;
+}
+
 /**
  * return true if a value was removed, false otherwise.
  *
@@ -655,6 +694,29 @@ inline bool mbtree<P>::remove(const key_type &k, value_type *old_v)
   if (found && old_v)
     *old_v = lp.value();
   lp.finish(found ? -1 : 0, ti);
+  return found;
+}
+
+template <typename P>
+inline bool mbtree<P>::remove_refcount(const key_type &k, value_type *old_v)
+{
+  //return remove(k, old_v);
+  rcu_region guard;
+  threadinfo ti;
+  Masstree::tcursor<P> lp(table_, k.data(), k.length());
+  bool found = lp.find_locked(ti);
+  if (found) {
+    if (--lp.value().refcount != 0) {
+      ti.advance_timestamp(lp.node_timestamp());
+      lp.finish(1, ti);
+    } else{
+      if (old_v)
+        *old_v = lp.value();
+      lp.finish(-1, ti);
+    }
+  }
+  else
+    lp.finish(0, ti);
   return found;
 }
 
