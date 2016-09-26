@@ -30,6 +30,11 @@ static const size_t YCSBRecordSize = 100;
 // the default is a modification of YCSB "A" we made (80/20 R/W)
 static unsigned g_txn_workload_mix[] = { 80, 20, 0, 0 };
 
+uint g_reps_per_tx = 1;
+uint g_rmw_additional_reads = 0;
+double g_zipf_theta = 0.;
+double g_rmw_read_ratio = 0.;
+
 class ycsb_worker : public bench_worker {
 public:
   ycsb_worker(unsigned int worker_id,
@@ -39,11 +44,15 @@ public:
     : bench_worker(worker_id, true, seed, db,
                    open_tables, barrier_a, barrier_b),
       tbl(open_tables.at("USERTABLE")),
-      computation_n(0)
+      computation_n(0),
+      rnd_record_select(477377 + seed),
+      rnd_op_select(477377 + 10101 + seed)
   {
     obj_key0.reserve(str_arena::MinStrReserveLength);
     obj_key1.reserve(str_arena::MinStrReserveLength);
     obj_v.reserve(str_arena::MinStrReserveLength);
+    for (size_t i = 0; i < max_keys; i++)
+      obj_keys[i].reserve(str_arena::MinStrReserveLength);
   }
 
   txn_result
@@ -95,19 +104,47 @@ public:
   txn_result
   txn_rmw()
   {
+    const uint32_t threshold = (uint32_t)(g_rmw_read_ratio * (double)(1 << 20));
+
+    for (uint i = 0; i < g_reps_per_tx + g_rmw_additional_reads; ++i) {
+      bool duplicate = true;
+      while (duplicate) {
+        duplicate = false;
+        keys[i] = zipf(nkeys, g_zipf_theta);
+        for (uint j = 0; j < i; j++)
+          if (keys[j] == keys[i]) {
+            duplicate = true;
+            break;
+        }
+      }
+    }
+
     void * const txn = db->new_txn(txn_flags, arena, txn_buf(), abstract_db::HINT_KV_RMW);
     scoped_str_arena s_arena(arena);
+
     try {
-      const uint64_t key = r.next() % nkeys;
-      ALWAYS_ASSERT(tbl->get(txn, u64_varkey(key).str(obj_key0), obj_v));
-      computation_n += obj_v.size();
-      tbl->put(txn, obj_key0, str().assign(YCSBRecordSize, 'c'));
+      for (uint i = 0; i < g_reps_per_tx; ++i) {
+        bool read = (rnd_op_select.next_u32() % (1 << 20)) < threshold;
+        auto& key = keys[i];
+        ALWAYS_ASSERT(tbl->get(txn, u64_varkey(key).str(obj_keys[i]), obj_v));
+        computation_n += obj_v.size();
+        if (!read)
+          tbl->put(txn, obj_keys[i], str().assign(YCSBRecordSize, 'c'));
+      }
+
+      for (uint i = 0; i < g_rmw_additional_reads; ++i) {
+        auto& key = keys[g_reps_per_tx + i];
+        ALWAYS_ASSERT(tbl->get(txn, u64_varkey(key).str(obj_keys[g_reps_per_tx + i]), obj_v));
+        computation_n += obj_v.size();
+      }
+
       measure_txn_counters(txn, "txn_rmw");
       if (likely(db->commit_txn(txn)))
-        return txn_result(true, 0);
+       return txn_result(true, 0);
     } catch (abstract_db::abstract_abort_exception &ex) {
       db->abort_txn(txn);
     }
+
     return txn_result(false, 0);
   }
 
@@ -190,6 +227,14 @@ public:
     return w;
   }
 
+  static void calculateDenom() {
+    // printf("n=%u, theta=%lf\n", nkeys, g_zipf_theta);
+    assert(the_n == 0);
+    the_n = nkeys;
+    denom = zeta(the_n, g_zipf_theta);
+    zeta_2_theta = zeta(2, g_zipf_theta);
+  }
+
 protected:
 
   virtual void
@@ -215,7 +260,44 @@ private:
   string obj_v;
 
   uint64_t computation_n;
+
+  fast_random rnd_record_select;
+  fast_random rnd_op_select;
+
+  static const size_t max_keys = 16;
+  uint64_t keys[max_keys];
+  string obj_keys[max_keys];
+
+  static double zeta(uint64_t n, double theta) {
+    double sum = 0;
+    for (uint64_t i = 1; i <= n; i++) sum += pow(1.0 / i, theta);
+    return sum;
+  }
+  uint64_t zipf(uint64_t n, double theta) {
+    assert(this->the_n == n);
+    assert(theta == g_zipf_theta);
+    double alpha = 1 / (1 - theta);
+    double zetan = denom;
+    double eta = (1 - pow(2.0 / n, 1 - theta)) / (1 - zeta_2_theta / zetan);
+    double u;
+    u = rnd_record_select.next_uniform();
+    double uz = u * zetan;
+    // if (uz < 1) return 1;
+    // if (uz < 1 + pow(0.5, theta)) return 2;
+    // return 1 + (uint64_t)(n * pow(eta*u -eta + 1, alpha));
+    if (uz < 1) return 0;
+    if (uz < 1 + pow(0.5, theta)) return 1;
+    uint64_t v = 0 + (uint64_t)(n * pow(eta * u - eta + 1, alpha));
+    if (v >= n) v = n - 1;
+    return v;
+  }
+  static uint64_t the_n;
+  static double denom;
+  static double zeta_2_theta;
 };
+uint64_t ycsb_worker::the_n;
+double ycsb_worker::denom;
+double ycsb_worker::zeta_2_theta;
 
 static void
 ycsb_load_keyrange(
@@ -408,6 +490,9 @@ protected:
       coreid::allocate_contiguous_aligned_block(nthreads, alignment);
     ALWAYS_ASSERT(blockstart >= 0);
     ALWAYS_ASSERT((blockstart % alignment) == 0);
+
+    ycsb_worker::calculateDenom();
+
     fast_random r(8544290);
     vector<bench_worker *> ret;
     for (size_t i = 0; i < nthreads; i++)
@@ -462,18 +547,23 @@ private:
 void
 ycsb_do_test(abstract_db *db, int argc, char **argv)
 {
-  nkeys = size_t(scale_factor * 1000.0);
-  ALWAYS_ASSERT(nkeys > 0);
+  //nkeys = size_t(scale_factor * 1000.0);
+  //ALWAYS_ASSERT(nkeys > 0);
 
   // parse options
   optind = 1;
   while (1) {
     static struct option long_options[] = {
-      {"workload-mix" , required_argument , 0 , 'w'},
+      {"workload-mix"           , required_argument , 0 , 'w'},
+      {"reps-per-tx"            , required_argument, 0                , 'r' },
+      {"rmw-additional-reads"   , required_argument, 0                , 'a' },
+      {"rmw-read-ratio"         , required_argument, 0                , 't' },
+      {"zipf-theta"             , required_argument, 0                , 'z' },
+      {"initial-table-size"     , required_argument, 0                , 's' },
       {0, 0, 0, 0}
     };
     int option_index = 0;
-    int c = getopt_long(argc, argv, "w:", long_options, &option_index);
+    int c = getopt_long(argc, argv, "w:r:a:t:z:s:", long_options, &option_index);
     if (c == -1)
       break;
     switch (c) {
@@ -498,6 +588,26 @@ ycsb_do_test(abstract_db *db, int argc, char **argv)
       }
       break;
 
+    case 'r':
+      g_reps_per_tx = strtoul(optarg, NULL, 10);
+      break;
+
+    case 'a':
+      g_rmw_additional_reads = strtoul(optarg, NULL, 10);
+      break;
+
+    case 't':
+      g_rmw_read_ratio = strtod(optarg, NULL);
+      break;
+
+    case 'z':
+      g_zipf_theta = strtod(optarg, NULL);
+      break;
+
+    case 's':
+      nkeys = strtoul(optarg, NULL, 10);
+      break;
+
     case '?':
       /* getopt_long already printed an error message. */
       exit(1);
@@ -507,11 +617,17 @@ ycsb_do_test(abstract_db *db, int argc, char **argv)
     }
   }
 
+  ALWAYS_ASSERT(nkeys);
+
   if (verbose) {
     cerr << "ycsb settings:" << endl;
     cerr << "  workload_mix: "
-         << format_list(g_txn_workload_mix, g_txn_workload_mix + ARRAY_NELEMS(g_txn_workload_mix))
-         << endl;
+         << format_list(g_txn_workload_mix, g_txn_workload_mix + ARRAY_NELEMS(g_txn_workload_mix)) << endl
+         << "  initial user table size:    " << nkeys << endl
+         << "  operations per transaction: " << g_reps_per_tx << endl
+         << "  additional reads after RMW: " << g_rmw_additional_reads << endl
+         << "  read ratio in RMW:          " << g_rmw_read_ratio << endl
+         << "  zipf theta:                 " << g_zipf_theta << endl;
   }
 
   ycsb_bench_runner r(db);

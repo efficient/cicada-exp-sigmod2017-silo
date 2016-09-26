@@ -30,7 +30,11 @@ struct hint_kv_get_put_traits {
   typedef str_arena StringAllocator;
 };
 
-struct hint_kv_rmw_traits : public hint_kv_get_put_traits {};
+struct hint_kv_rmw_traits : public hint_kv_get_put_traits {
+  static const size_t read_set_expected_size = 16;
+  static const size_t write_set_expected_size = 16;
+  static const size_t absent_set_expected_size = 16;
+};
 
 struct hint_kv_scan_traits {
   static const size_t read_set_expected_size = 100;
