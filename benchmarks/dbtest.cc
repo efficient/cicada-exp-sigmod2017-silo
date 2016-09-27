@@ -351,6 +351,7 @@ main(int argc, char **argv)
       cerr << "  runtime     : " << runtime                 << endl;
     else
       cerr << "  ops/worker  : " << ops_per_worker          << endl;
+    cerr << "  max-runtime : " << max_runtime               << endl;
 #ifdef USE_VARINT_ENCODING
     cerr << "  var-encode  : yes"                           << endl;
 #else

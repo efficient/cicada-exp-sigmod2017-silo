@@ -57,7 +57,7 @@ public:
     all_keys = new uint64_t[ops_per_worker * (g_reps_per_tx + g_rmw_additional_reads)];
   }
 
-  ~ycsb_worker() { delete [] all_keys; }
+  virtual ~ycsb_worker() { delete [] all_keys; }
 
   txn_result
   txn_read()
@@ -108,12 +108,11 @@ public:
   txn_result
   txn_rmw()
   {
-    const uint32_t threshold = (uint32_t)(g_rmw_read_ratio * (double)(1 << 20));
-
     void * const txn = db->new_txn(txn_flags, arena, txn_buf(), abstract_db::HINT_KV_RMW);
     scoped_str_arena s_arena(arena);
 
     try {
+      const uint32_t threshold = (uint32_t)(g_rmw_read_ratio * (double)(1 << 20));
       size_t off = get_ntxn_commits() * (g_reps_per_tx + g_rmw_additional_reads);
 
       for (uint i = 0; i < g_reps_per_tx; ++i) {
