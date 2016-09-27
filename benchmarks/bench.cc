@@ -35,6 +35,7 @@ int verbose = 0;
 uint64_t txn_flags = 0;
 double scale_factor = 1.0;
 uint64_t runtime = 30;
+uint64_t max_runtime = 0;
 uint64_t ops_per_worker = 0;
 int run_mode = RUNMODE_TIME;
 int enable_parallel_loading = false;
@@ -120,6 +121,7 @@ bench_worker::run()
   txn_counts.resize(workload.size());
   barrier_a->count_down();
   barrier_b->wait_for();
+  uint64_t t_start = timer::cur_usec();
   while (running && (run_mode != RUNMODE_OPS || ntxn_commits < ops_per_worker)) {
     double d = r.next_uniform();
     for (size_t i = 0; i < workload.size(); i++) {
@@ -157,6 +159,10 @@ bench_worker::run()
         break;
       }
       d -= workload[i].frequency;
+    }
+    if (worker_id == 0 && max_runtime != 0 && (ntxn_commits + ntxn_aborts) % 0xfff == 0) {
+      if (timer::cur_usec() - t_start > max_runtime)
+        running = false;
     }
   }
 }

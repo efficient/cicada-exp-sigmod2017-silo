@@ -53,7 +53,11 @@ public:
     obj_v.reserve(str_arena::MinStrReserveLength);
     for (size_t i = 0; i < max_keys; i++)
       obj_keys[i].reserve(str_arena::MinStrReserveLength);
+
+    all_keys = new uint64_t[ops_per_worker * (g_reps_per_tx + g_rmw_additional_reads)];
   }
+
+  ~ycsb_worker() { delete [] all_keys; }
 
   txn_result
   txn_read()
@@ -106,26 +110,15 @@ public:
   {
     const uint32_t threshold = (uint32_t)(g_rmw_read_ratio * (double)(1 << 20));
 
-    for (uint i = 0; i < g_reps_per_tx + g_rmw_additional_reads; ++i) {
-      bool duplicate = true;
-      while (duplicate) {
-        duplicate = false;
-        keys[i] = zipf(nkeys, g_zipf_theta);
-        for (uint j = 0; j < i; j++)
-          if (keys[j] == keys[i]) {
-            duplicate = true;
-            break;
-        }
-      }
-    }
-
     void * const txn = db->new_txn(txn_flags, arena, txn_buf(), abstract_db::HINT_KV_RMW);
     scoped_str_arena s_arena(arena);
 
     try {
+      size_t off = get_ntxn_commits() * (g_reps_per_tx + g_rmw_additional_reads);
+
       for (uint i = 0; i < g_reps_per_tx; ++i) {
         bool read = (rnd_op_select.next_u32() % (1 << 20)) < threshold;
-        auto& key = keys[i];
+        auto& key = all_keys[off + i];
         ALWAYS_ASSERT(tbl->get(txn, u64_varkey(key).str(obj_keys[i]), obj_v));
         computation_n += obj_v.size();
         if (!read)
@@ -133,7 +126,7 @@ public:
       }
 
       for (uint i = 0; i < g_rmw_additional_reads; ++i) {
-        auto& key = keys[g_reps_per_tx + i];
+        auto& key = all_keys[off + g_reps_per_tx + i];
         ALWAYS_ASSERT(tbl->get(txn, u64_varkey(key).str(obj_keys[g_reps_per_tx + i]), obj_v));
         computation_n += obj_v.size();
       }
@@ -245,6 +238,24 @@ protected:
     const size_t a = worker_id % coreid::num_cpus_online();
     const size_t b = a % nthreads;
     rcu::s_instance.pin_current_thread(b);
+
+    for (uint t = 0; t < ops_per_worker; ++t) {
+      size_t off = t * (g_reps_per_tx + g_rmw_additional_reads);
+
+      for (uint i = 0; i < g_reps_per_tx + g_rmw_additional_reads; ++i) {
+        bool duplicate = true;
+        while (duplicate) {
+          duplicate = false;
+          all_keys[off + i] = zipf(nkeys, g_zipf_theta);
+          for (uint j = 0; j < i; j++)
+            if (all_keys[off + j] == all_keys[off + i]) {
+              duplicate = true;
+              break;
+          }
+        }
+      }
+    }
+    cerr << "[INFO] finished generating keys [worker_id=" << worker_id << "]" << endl;
   }
 
   inline ALWAYS_INLINE string &
@@ -265,8 +276,9 @@ private:
   fast_random rnd_op_select;
 
   static const size_t max_keys = 16;
-  uint64_t keys[max_keys];
   string obj_keys[max_keys];
+
+  uint64_t* all_keys;
 
   static double zeta(uint64_t n, double theta) {
     double sum = 0;
@@ -618,6 +630,10 @@ ycsb_do_test(abstract_db *db, int argc, char **argv)
   }
 
   ALWAYS_ASSERT(nkeys);
+
+  // Both must be non-zero because we use a trace.
+  ALWAYS_ASSERT(ops_per_worker);
+  ALWAYS_ASSERT(max_runtime);
 
   if (verbose) {
     cerr << "ycsb settings:" << endl;

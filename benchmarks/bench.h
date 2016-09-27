@@ -33,6 +33,7 @@ extern int verbose;
 extern uint64_t txn_flags;
 extern double scale_factor;
 extern uint64_t runtime;
+extern uint64_t max_runtime;
 extern uint64_t ops_per_worker;
 extern int run_mode;
 extern int enable_parallel_loading;

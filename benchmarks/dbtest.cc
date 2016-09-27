@@ -92,6 +92,7 @@ main(int argc, char **argv)
       {"basedir"                    , required_argument , 0                          , 'B'} ,
       {"txn-flags"                  , required_argument , 0                          , 'f'} ,
       {"runtime"                    , required_argument , 0                          , 'r'} ,
+      {"max-runtime"                , required_argument , 0                          , 'R'} ,
       {"ops-per-worker"             , required_argument , 0                          , 'n'} ,
       {"bench-opts"                 , required_argument , 0                          , 'o'} ,
       {"numa-memory"                , required_argument , 0                          , 'm'} , // implies --pin-cpus
@@ -150,6 +151,10 @@ main(int argc, char **argv)
       runtime = strtoul(optarg, NULL, 10);
       ALWAYS_ASSERT(runtime > 0);
       run_mode = RUNMODE_TIME;
+      break;
+
+    case 'R':
+      max_runtime = strtoul(optarg, NULL, 10);
       break;
 
     case 'n':
