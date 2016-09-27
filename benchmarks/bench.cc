@@ -160,7 +160,7 @@ bench_worker::run()
       }
       d -= workload[i].frequency;
     }
-    if (worker_id == 0 && max_runtime != 0 && (ntxn_commits + ntxn_aborts) % 0xfff == 0) {
+    if (max_runtime != 0 && (ntxn_commits + ntxn_aborts) % 0xfff == 0) {
       if (timer::cur_usec() - t_start > max_runtime * 1000000)
         running = false;
     }
